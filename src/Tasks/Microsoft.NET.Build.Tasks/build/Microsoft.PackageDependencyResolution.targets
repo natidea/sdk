@@ -243,6 +243,14 @@ Copyright (c) .NET Foundation. All rights reserved.
         <NuGetSourceType>Package</NuGetSourceType>
       </ResolvedCompileFileDefinitions>
 
+      <_FrameworkAssemblies Include="@(TFMFileItems->WithMetadataValue('FileGroup', 'FrameworkAssembly'))" />
+
+      <ResolvedCompileFileDefinitions Include="%(_FrameworkAssemblies.FrameworkAssembly)">
+        <Private>false</Private>
+        <NuGetIsFrameworkReference>true</NuGetIsFrameworkReference>
+        <NuGetSourceType>Package</NuGetSourceType>
+      </ResolvedCompileFileDefinitions>
+
     </ItemGroup>
   </Target>
 
