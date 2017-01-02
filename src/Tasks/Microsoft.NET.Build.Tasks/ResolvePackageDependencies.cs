@@ -5,6 +5,7 @@ using Microsoft.Build.Framework;
 using Microsoft.Build.Utilities;
 using NuGet.Configuration;
 using NuGet.ProjectModel;
+using NuGet.Versioning;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -160,6 +161,172 @@ namespace Microsoft.NET.Build.Tasks
             ReadProjectFileDependencies();
             RaiseLockFileTargets();
             GetPackageAndFileDefinitions();
+
+            // add test diagnostics
+            //AddTestDiagnostics();
+
+            GetAllDiagnostics();
+        }
+
+        private void GetAllDiagnostics()
+        {
+            Dictionary<string, string> projectDeps = new Dictionary<string, string>();
+
+            foreach (var group in LockFile.ProjectFileDependencyGroups)
+            {
+                foreach (var dep in group.Dependencies)
+                {
+                    var parts = dep.Split(new char[] { '<', '=', '>' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (parts.Length != 2) continue;
+                    projectDeps.Add(parts[0].Trim(), parts[1].Trim());
+                }
+            }
+
+            // if a project dependency is not in the list of libs, then it is an unresolved reference
+            var unresolved = projectDeps.Where(k =>
+                null == LockFile.Libraries.FirstOrDefault(lib => lib.Name == k.Key));
+
+            foreach (var target in LockFile.Targets)
+            {
+                foreach (var lib in unresolved)
+                {
+                    string packageId = $"{lib.Key}/{lib.Value}";
+
+                    // Add unresolved package definition item
+                    var item = new TaskItem(packageId);
+                    item.SetMetadata(MetadataKeys.Name, lib.Key);
+                    item.SetMetadata(MetadataKeys.Type, "package");
+                    item.SetMetadata(MetadataKeys.Version, lib.Value);
+                    item.SetMetadata(MetadataKeys.Path, string.Empty);
+                    item.SetMetadata(MetadataKeys.ResolvedPath, string.Empty);
+                    _packageDefinitions.Add(item);
+
+                    // Add a diagnostic
+                    Diagnostics.Add("NU1001",
+                        string.Format(Strings.NU1001, lib),
+                        ProjectPath,
+                        DiagnosticMessageSeverity.Warning,
+                        1, 0,
+                        target.Name,
+                        packageId);
+                }
+
+                // if project dependency version does not match library version
+                foreach (var dep in projectDeps)
+                {
+                    var library = target.Libraries.FirstOrDefault(lib => lib.Name == dep.Key);
+                    if (library != null && library.Version.ToNormalizedString() != dep.Value)
+                    {
+                        // mismatch
+                        Diagnostics.Add("NU1012",
+                            string.Format(Strings.NU1012, library.Name, dep.Value, library.Version.ToNormalizedString()),
+                            ProjectPath,
+                            DiagnosticMessageSeverity.Warning,
+                            1, 0,
+                            target.Name,
+                            $"{library.Name}/{library.Version.ToNormalizedString()}");
+                    }
+                }
+            }
+
+            GetDepDiagnostics(LockFile);
+        }
+
+        private void GetDepDiagnostics(LockFile lockFile)
+        {
+            Dictionary<string, HashSet<VersionRange>> requestedRanges = new Dictionary<string, HashSet<VersionRange>>();
+            foreach (var target in lockFile.Targets)
+            {
+                foreach (var library in target.Libraries)
+                {
+                    foreach (var dep in library.Dependencies)
+                    {
+                        if (!requestedRanges.TryGetValue(dep.Id, out var versionRanges))
+                        {
+                            versionRanges = new HashSet<VersionRange>();
+                            requestedRanges.Add(dep.Id, versionRanges);
+                        }
+                        versionRanges.Add(dep.VersionRange);
+                    }
+                }
+            }
+
+            foreach (var target in lockFile.Targets)
+            {
+                foreach (var library in target.Libraries)
+                {
+                    if (requestedRanges.TryGetValue(library.Name, out var versionRanges))
+                    {
+                        foreach (var range in versionRanges)
+                        {
+                            if (range == null) continue;
+
+                            if ((!range.IsFloating && range.MinVersion != library.Version) ||
+                                (range.IsFloating && range.Float?.Satisfies(library.Version) == true))
+                            {
+                                // mismatch
+                                Diagnostics.Add("NU1007",
+                                    string.Format(Strings.NU1007,
+                                        $"{library.Name}/{range.MinVersion?.ToNormalizedString()}",
+                                        $"{library.Name}/{library.Version.ToNormalizedString()}"),
+                                    ProjectPath,
+                                    DiagnosticMessageSeverity.Warning,
+                                    1, 0,
+                                    target.Name,
+                                    $"{library.Name}/{library.Version.ToNormalizedString()}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private void AddTestDiagnostics()
+        {
+            string projectFile = ProjectPath;
+
+            Diagnostics.Add("PLN01",
+                "This is an orphan diagnostic with no parents",
+                projectFile,
+                DiagnosticMessageSeverity.Warning);
+
+            var item = _targetDefinitions.First();
+
+            Diagnostics.Add("TGT01",
+                "This is the first target",
+                projectFile,
+                DiagnosticMessageSeverity.Warning,
+                1, 0, item.ItemSpec, null);
+
+            item = _packageDependencies.FirstOrDefault(t => string.IsNullOrEmpty(t.GetMetadata(MetadataKeys.ParentPackage)));            
+
+            Diagnostics.Add("PKG01",
+                "This is the first top level package",
+                projectFile,
+                DiagnosticMessageSeverity.Warning,
+                1, 0,
+                item?.GetMetadata(MetadataKeys.ParentTarget),
+                item?.ItemSpec);
+
+            item = _packageDependencies.FirstOrDefault(t => !string.IsNullOrEmpty(t.GetMetadata(MetadataKeys.ParentPackage)));
+
+            Diagnostics.Add("PKG02",
+                "This is the first child package",
+                projectFile,
+                DiagnosticMessageSeverity.Warning,
+                1, 0,
+                item?.GetMetadata(MetadataKeys.ParentTarget),
+                item?.ItemSpec);
+
+            item = _fileDependencies.FirstOrDefault(t => !string.IsNullOrEmpty(t.GetMetadata(MetadataKeys.ParentPackage)));
+
+            Diagnostics.Add("PKG03",
+                "This is the first file dependency's parent package",
+                projectFile,
+                DiagnosticMessageSeverity.Warning,
+                1, 0,
+                item?.GetMetadata(MetadataKeys.ParentTarget),
+                item?.GetMetadata(MetadataKeys.ParentPackage));
         }
 
         private void ReadProjectFileDependencies()
@@ -416,7 +583,6 @@ namespace Microsoft.NET.Build.Tasks
                 }
             }
         }
-
 
         private string ResolvePackagePath(LockFileLibrary package)
         {
