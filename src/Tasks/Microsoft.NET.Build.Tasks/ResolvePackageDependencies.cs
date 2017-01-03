@@ -8,6 +8,7 @@ using NuGet.ProjectModel;
 using NuGet.Versioning;
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 
@@ -162,48 +163,35 @@ namespace Microsoft.NET.Build.Tasks
             RaiseLockFileTargets();
             GetPackageAndFileDefinitions();
 
-            // add test diagnostics
-            //AddTestDiagnostics();
-
-            GetAllDiagnostics();
+            GetDependencyDiagnostics();
         }
 
-        private void GetAllDiagnostics()
+        private void GetDependencyDiagnostics()
         {
-            Dictionary<string, string> projectDeps = new Dictionary<string, string>();
-
-            foreach (var group in LockFile.ProjectFileDependencyGroups)
-            {
-                foreach (var dep in group.Dependencies)
-                {
-                    var parts = dep.Split(new char[] { '<', '=', '>' }, StringSplitOptions.RemoveEmptyEntries);
-                    if (parts.Length != 2) continue;
-                    projectDeps.Add(parts[0].Trim(), parts[1].Trim());
-                }
-            }
+            Dictionary<string, string> projectDeps = LockFile.GetProjectFileDependencies();
 
             // if a project dependency is not in the list of libs, then it is an unresolved reference
-            var unresolved = projectDeps.Where(k =>
-                null == LockFile.Libraries.FirstOrDefault(lib => lib.Name == k.Key));
+            var unresolvedDeps = projectDeps.Where(dep =>
+                null == LockFile.Libraries.FirstOrDefault(lib => 
+                    string.Equals(lib.Name, dep.Key, StringComparison.OrdinalIgnoreCase)));
 
             foreach (var target in LockFile.Targets)
             {
-                foreach (var lib in unresolved)
+                foreach (var dep in unresolvedDeps)
                 {
-                    string packageId = $"{lib.Key}/{lib.Value}";
+                    string packageId = $"{dep.Key}/{dep.Value}";
 
                     // Add unresolved package definition item
                     var item = new TaskItem(packageId);
-                    item.SetMetadata(MetadataKeys.Name, lib.Key);
+                    item.SetMetadata(MetadataKeys.Name, dep.Key);
                     item.SetMetadata(MetadataKeys.Type, "package");
-                    item.SetMetadata(MetadataKeys.Version, lib.Value);
+                    item.SetMetadata(MetadataKeys.Version, dep.Value);
                     item.SetMetadata(MetadataKeys.Path, string.Empty);
                     item.SetMetadata(MetadataKeys.ResolvedPath, string.Empty);
                     _packageDefinitions.Add(item);
 
-                    // Add a diagnostic
-                    Diagnostics.Add("NU1001",
-                        string.Format(Strings.NU1001, lib),
+                    Diagnostics.Add(nameof(Strings.NU1001),
+                        string.Format(CultureInfo.CurrentCulture, Strings.NU1001, dep),
                         ProjectPath,
                         DiagnosticMessageSeverity.Warning,
                         1, 0,
@@ -211,25 +199,28 @@ namespace Microsoft.NET.Build.Tasks
                         packageId);
                 }
 
-                // if project dependency version does not match library version
+                // report diagnostic if project dependency version does not match library version
                 foreach (var dep in projectDeps)
                 {
-                    var library = target.Libraries.FirstOrDefault(lib => lib.Name == dep.Key);
-                    if (library != null && library.Version.ToNormalizedString() != dep.Value)
+                    var library = target.Libraries.FirstOrDefault(lib => 
+                        string.Equals(lib.Name, dep.Key, StringComparison.OrdinalIgnoreCase));
+                    var libraryVersion = library?.Version?.ToNormalizedString();
+
+                    if (libraryVersion != null && dep.Value != null &&
+                        !string.Equals(libraryVersion, dep.Value, StringComparison.OrdinalIgnoreCase))
                     {
-                        // mismatch
-                        Diagnostics.Add("NU1012",
-                            string.Format(Strings.NU1012, library.Name, dep.Value, library.Version.ToNormalizedString()),
+                        Diagnostics.Add(nameof(Strings.NU1012),
+                            string.Format(CultureInfo.CurrentCulture, Strings.NU1012, library.Name, dep.Value, libraryVersion),
                             ProjectPath,
                             DiagnosticMessageSeverity.Warning,
                             1, 0,
                             target.Name,
-                            $"{library.Name}/{library.Version.ToNormalizedString()}");
+                            $"{library.Name}/{libraryVersion}");
                     }
                 }
             }
 
-            GetDepDiagnostics(LockFile);
+            //GetDepDiagnostics(LockFile);
         }
 
         private void GetDepDiagnostics(LockFile lockFile)
@@ -265,7 +256,7 @@ namespace Microsoft.NET.Build.Tasks
                                 (range.IsFloating && range.Float?.Satisfies(library.Version) == true))
                             {
                                 // mismatch
-                                Diagnostics.Add("NU1007",
+                                Diagnostics.Add(nameof(Strings.NU1007),
                                     string.Format(Strings.NU1007,
                                         $"{library.Name}/{range.MinVersion?.ToNormalizedString()}",
                                         $"{library.Name}/{library.Version.ToNormalizedString()}"),
