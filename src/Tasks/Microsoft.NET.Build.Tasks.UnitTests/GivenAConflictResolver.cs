@@ -3,10 +3,7 @@
 
 using System;
 using System.Collections.Generic;
-using System.Text;
 using FluentAssertions;
-using Microsoft.Build.Framework;
-using Microsoft.Extensions.DependencyModel;
 using Xunit;
 using Microsoft.NET.Build.Tasks.ConflictResolution;
 using System.Linq;
@@ -393,25 +390,5 @@ namespace Microsoft.NET.Build.Tasks.UnitTests
 
             public string DisplayName { get; set; }
         }
-
-        class MockLog : ILog
-        {
-            public void LogError(string message, params object[] messageArgs)
-            {
-            }
-
-            public void LogMessage(string message, params object[] messageArgs)
-            {
-            }
-
-            public void LogMessage(LogImportance importance, string message, params object[] messageArgs)
-            {
-            }
-
-            public void LogWarning(string message, params object[] messageArgs)
-            {
-            }
-        }
-
     }
 }
