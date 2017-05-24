@@ -308,6 +308,8 @@ Copyright (c) .NET Foundation. All rights reserved.
     
     <ReportAssetsLogMessages
       ProjectAssetsFile="$(ProjectAssetsFile)"
+      WarnAsError="$(WarnAsError)"
+      NoWarn="$(NoWarn)"
       ContinueOnError="ErrorAndContinue">
 
       <Output TaskParameter="DiagnosticMessages" ItemName="DiagnosticMessages" />

@@ -4,6 +4,8 @@
 using Microsoft.Build.Framework;
 using NuGet.Common;
 using NuGet.ProjectModel;
+using System;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace Microsoft.NET.Build.Tasks
@@ -16,6 +18,9 @@ namespace Microsoft.NET.Build.Tasks
     public sealed class ReportAssetsLogMessages : TaskBase
     {
         private LockFile _lockFile;
+        private readonly HashSet<NuGetLogCode> _warnAsErrorCodes = new HashSet<NuGetLogCode>();
+        private readonly HashSet<NuGetLogCode> _noWarnCodes = new HashSet<NuGetLogCode>();
+        private readonly static string[] _separators = new string[] { ",", ";" };
 
         #region Outputs
 
@@ -30,6 +35,24 @@ namespace Microsoft.NET.Build.Tasks
         /// </summary>
         [Required]
         public string ProjectAssetsFile
+        {
+            get; set;
+        }
+
+        /// <summary>
+        /// Comma separated list of codes for diagnostics that should 
+        /// always be treated as errors
+        /// </summary>
+        public string WarnAsError
+        {
+            get; set;
+        }
+
+        /// <summary>
+        /// Comma separated list of codes for diagnostics that should be 
+        /// filtered out of the final results
+        /// </summary>
+        public string NoWarn
         {
             get; set;
         }
@@ -65,16 +88,30 @@ namespace Microsoft.NET.Build.Tasks
 
         protected override void ExecuteCore()
         {
+            InitializeCodeSets();
+
             foreach (var message in LockFile.LogMessages)
             {
                 AddMessage(message);
             }
         }
 
+        private void InitializeCodeSets()
+        {
+            AddNuGetCodesToSet(WarnAsError, _warnAsErrorCodes);
+            AddNuGetCodesToSet(NoWarn, _noWarnCodes);
+        }
+
         private void AddMessage(IAssetsLogMessage message)
         {
+            if (_noWarnCodes.Contains(message.Code))
+            {
+                return;
+            }
+
             var logToMsBuild = true;
             var targetGraphs = message.GetTargetGraphs(LockFile);
+            bool warnAsError = _warnAsErrorCodes.Contains(message.Code);
 
             targetGraphs = targetGraphs.Any() ? targetGraphs : new LockFileTarget[] { null };
 
@@ -86,7 +123,7 @@ namespace Microsoft.NET.Build.Tasks
                     message.Code.ToString(),
                     message.Message,
                     message.FilePath,
-                    FromLogLevel(message.Level),
+                    warnAsError ? DiagnosticMessageSeverity.Error : FromLogLevel(message.Level),
                     message.StartLineNumber,
                     message.StartColumnNumber,
                     message.EndLineNumber,
@@ -117,5 +154,21 @@ namespace Microsoft.NET.Build.Tasks
                     return DiagnosticMessageSeverity.Info;
             }
         }
+
+        private static void AddNuGetCodesToSet(string codes, HashSet<NuGetLogCode> codeSet)
+        {
+            if (!string.IsNullOrWhiteSpace(codes))
+            {
+                codes.Split(_separators, StringSplitOptions.RemoveEmptyEntries)
+                    .Select(code => ParseNuGetCode(code))
+                    .Where(code => code != NuGetLogCode.Undefined)
+                    .ToList().ForEach(code => codeSet.Add(code));
+            }
+        }
+
+        private static NuGetLogCode ParseNuGetCode(string code) => 
+            Enum.TryParse(code.Trim(), true, out NuGetLogCode nugetLogCode) 
+            ? nugetLogCode 
+            : NuGetLogCode.Undefined;
     }
 }
