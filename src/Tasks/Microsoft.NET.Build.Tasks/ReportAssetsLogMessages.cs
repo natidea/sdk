@@ -40,6 +40,14 @@ namespace Microsoft.NET.Build.Tasks
         }
 
         /// <summary>
+        /// Indicate that warnings should always be treated as errors
+        /// </summary>
+        public bool TreatWarningsAsErrors
+        {
+            get; set;
+        }
+
+        /// <summary>
         /// Comma separated list of codes for diagnostics that should 
         /// always be treated as errors
         /// </summary>
@@ -111,7 +119,6 @@ namespace Microsoft.NET.Build.Tasks
 
             var logToMsBuild = true;
             var targetGraphs = message.GetTargetGraphs(LockFile);
-            bool warnAsError = _warnAsErrorCodes.Contains(message.Code);
 
             targetGraphs = targetGraphs.Any() ? targetGraphs : new LockFileTarget[] { null };
 
@@ -123,7 +130,7 @@ namespace Microsoft.NET.Build.Tasks
                     message.Code.ToString(),
                     message.Message,
                     message.FilePath,
-                    warnAsError ? DiagnosticMessageSeverity.Error : FromLogLevel(message.Level),
+                    ComputeSeverity(message),
                     message.StartLineNumber,
                     message.StartColumnNumber,
                     message.EndLineNumber,
@@ -134,6 +141,20 @@ namespace Microsoft.NET.Build.Tasks
 
                 logToMsBuild = false; // only write first instance of this diagnostic to msbuild
             }
+        }
+
+        private DiagnosticMessageSeverity ComputeSeverity(IAssetsLogMessage message)
+        {
+            var severity = FromLogLevel(message.Level);
+            if (TreatWarningsAsErrors && severity == DiagnosticMessageSeverity.Warning)
+            {
+                severity = DiagnosticMessageSeverity.Error;
+            }
+            else
+            {
+                severity = _warnAsErrorCodes.Contains(message.Code) ? DiagnosticMessageSeverity.Error : severity;
+            }
+            return severity;
         }
 
         private static DiagnosticMessageSeverity FromLogLevel(LogLevel level)

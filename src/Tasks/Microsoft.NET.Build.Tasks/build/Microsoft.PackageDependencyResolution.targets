@@ -308,7 +308,8 @@ Copyright (c) .NET Foundation. All rights reserved.
     
     <ReportAssetsLogMessages
       ProjectAssetsFile="$(ProjectAssetsFile)"
-      WarnAsError="$(WarnAsError)"
+      TreatWarningsAsErrors="$(TreatWarningsAsErrors)"
+      WarnAsError="$(TreatSpecificWarningsAsErrors)"
       NoWarn="$(NoWarn)"
       ContinueOnError="ErrorAndContinue">
 
