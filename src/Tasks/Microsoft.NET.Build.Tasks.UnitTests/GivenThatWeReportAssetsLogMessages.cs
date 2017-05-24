@@ -5,6 +5,7 @@ using FluentAssertions;
 using NuGet.Common;
 using NuGet.ProjectModel;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Xunit;
 using static Microsoft.NET.Build.Tasks.UnitTests.LockFileSnippets;
@@ -190,6 +191,172 @@ namespace Microsoft.NET.Build.Tasks.UnitTests
                     .Should().OnlyContain(v => v == "NU1001");
         }
 
+        [Fact]
+        public void ItCanReportWarningsAsErrors()
+        {
+            var log = new MockLog();
+            string lockFileContent = CreateDefaultLockFileSnippet(
+                logs: new string[] {
+                    CreateLog(NuGetLogCode.NU1000, LogLevel.Error, "1000 error"),
+                    CreateLog(NuGetLogCode.NU1000, LogLevel.Warning, "1000 warning"), // warning -> error
+                    CreateLog(NuGetLogCode.NU1001, LogLevel.Error, "1001 error"),
+                    CreateLog(NuGetLogCode.NU1001, LogLevel.Warning, "1001 warning"),
+                    CreateLog(NuGetLogCode.NU1002, LogLevel.Information, "1002 info"), // info -> error
+                    CreateLog(NuGetLogCode.NU1100, LogLevel.Information, "1100 info"),
+                }
+            );
+
+            var task = GetExecutedTaskFromContents(lockFileContent, log, warnAsError: "NU1000;NU1002");
+
+            log.Messages.Should().HaveCount(6);
+            log.Messages.Where(m => m.StartsWith("[ERROR]:")).Should().HaveCount(4);
+
+            task.DiagnosticMessages.Should().HaveCount(6);
+
+            task.DiagnosticMessages
+                .Where(item => item.HasMetadataValue(MetadataKeys.Severity, "Error"))
+                .Should().HaveCount(4);
+
+            task.DiagnosticMessages
+                .Where(item => item.HasMetadataValue(MetadataKeys.DiagnosticCode, "NU1000"))
+                .Select(item => item.GetMetadata(MetadataKeys.Severity))
+                .Should().OnlyContain(v => v == "Error");
+
+            task.DiagnosticMessages
+                .Where(item => item.HasMetadataValue(MetadataKeys.DiagnosticCode, "NU1002"))
+                .Select(item => item.GetMetadata(MetadataKeys.Severity))
+                .Should().OnlyContain(v => v == "Error");
+
+            task.DiagnosticMessages
+                .Where(item => item.HasMetadataValue(MetadataKeys.DiagnosticCode, "NU1001"))
+                .Where(item => item.HasMetadataValue(MetadataKeys.Severity, "Warning"))
+                .Should().HaveCount(1);
+
+            task.DiagnosticMessages
+                .Where(item => item.HasMetadataValue(MetadataKeys.DiagnosticCode, "NU1100"))
+                .Select(item => item.GetMetadata(MetadataKeys.Severity))
+                .Should().OnlyContain(v => v == "Info");
+        }
+
+
+        [Fact]
+        public void ItSuppressesNoWarnIssues()
+        {
+            var log = new MockLog();
+            string lockFileContent = CreateDefaultLockFileSnippet(
+                logs: new string[] {
+                    CreateLog(NuGetLogCode.NU1000, LogLevel.Error, "1000 error"),
+                    CreateLog(NuGetLogCode.NU1000, LogLevel.Warning, "1000 warning"),
+                    CreateLog(NuGetLogCode.NU1001, LogLevel.Error, "1001 error"),
+                    CreateLog(NuGetLogCode.NU1001, LogLevel.Warning, "1001 warning"),
+                    CreateLog(NuGetLogCode.NU1002, LogLevel.Information, "1002 info"),
+                    CreateLog(NuGetLogCode.NU1100, LogLevel.Information, "1100 info"),
+                }
+            );
+
+            var task = GetExecutedTaskFromContents(lockFileContent, log, noWarn: "NU1000;NU1002");
+
+            log.Messages.Should().HaveCount(3);
+            task.DiagnosticMessages.Should().HaveCount(3);
+
+            task.DiagnosticMessages
+                    .Select(item => item.GetMetadata(MetadataKeys.DiagnosticCode))
+                    .Should().Contain(new string[] { "NU1001", "NU1100" });
+        }
+
+        public static IEnumerable<object[]> InvalidCodes
+        {
+            get
+            {
+                return new[]
+                {
+                    new object[] {"", null},
+                    new object[] {"  ", null},
+                    new object[] {";", null},
+                    new object[] {"abc!@#;", null},
+                    new object[] {",1000;", null},
+                    new object[] {"abc!@#;NU1100", new string[] { "NU1100" }},
+                    new object[] {"NU1101, NU1102;NU1103,abcd", new string[] { "NU1101", "NU1102", "NU1103" }},
+                    new object[] {"NU1101,NU999", new string[] { "NU1101" }},
+                    new object[] {"NU1101,CS2002", new string[] { "NU1101" }},
+                };
+            }
+        }
+
+        [Theory]
+        [MemberData(nameof(InvalidCodes))]
+        public void ItSkipsInvalidWarnAsErrorCodes(string warnAsError, string [] expectedErrors)
+        {
+            var log = new MockLog();
+            string lockFileContent = CreateDefaultLockFileSnippet(
+                logs: new string[] {
+                    CreateLog(NuGetLogCode.NU1100, LogLevel.Warning, "Sample warning"),
+                    CreateLog(NuGetLogCode.NU1101, LogLevel.Warning, "Sample warning"),
+                    CreateLog(NuGetLogCode.NU1102, LogLevel.Warning, "Sample warning"),
+                    CreateLog(NuGetLogCode.NU1103, LogLevel.Warning, "Sample warning"),
+                }
+            );
+
+            var task = GetExecutedTaskFromContents(lockFileContent, log, warnAsError: warnAsError);
+
+            log.Messages.Should().HaveCount(4);
+            task.DiagnosticMessages.Should().HaveCount(4);
+
+            var errors = task.DiagnosticMessages
+                .Where(item => item.HasMetadataValue(MetadataKeys.Severity, "Error"));
+
+            expectedErrors = expectedErrors ?? new string[0];
+            errors.Should().HaveCount(expectedErrors.Length);            
+
+            if (expectedErrors.Length > 0)
+            {
+                errors
+                    .Select(item => item.GetMetadata(MetadataKeys.DiagnosticCode))
+                    .Should().Contain(expectedErrors);
+            }
+            else
+            {
+                errors.Should().BeEmpty();
+            }
+        }
+
+        [Theory]
+        [MemberData(nameof(InvalidCodes))]
+        public void ItSkipsInvalidNoWarnCodes(string noWarn, string[] expectedSuppressed)
+        {
+            var log = new MockLog();
+            string[] logMessages = new string[] {
+                    CreateLog(NuGetLogCode.NU1100, LogLevel.Warning, "Sample warning"),
+                    CreateLog(NuGetLogCode.NU1101, LogLevel.Warning, "Sample warning"),
+                    CreateLog(NuGetLogCode.NU1102, LogLevel.Warning, "Sample warning"),
+                    CreateLog(NuGetLogCode.NU1103, LogLevel.Warning, "Sample warning"),
+                };
+
+            string lockFileContent = CreateDefaultLockFileSnippet(
+                logs: logMessages
+            );
+
+            var task = GetExecutedTaskFromContents(lockFileContent, log, noWarn: noWarn);
+
+            expectedSuppressed = expectedSuppressed ?? new string[0];
+            var initialCount = logMessages.Length;
+            var finalCount = initialCount - expectedSuppressed.Length;
+
+            log.Messages.Should().HaveCount(finalCount);
+            task.DiagnosticMessages.Should().HaveCount(finalCount);
+
+            if (expectedSuppressed.Length > 0)
+            {
+                task.DiagnosticMessages
+                    .Select(item => item.GetMetadata(MetadataKeys.DiagnosticCode))
+                    .Should().NotContain(expectedSuppressed);
+            }
+            else
+            {
+                task.DiagnosticMessages.Should().HaveCount(initialCount);
+            }
+        }
+
         private static string CreateDefaultLockFileSnippet(string[] logs = null) => 
             CreateLockFileSnippet(
                 targets: new string[] {
@@ -202,17 +369,21 @@ namespace Microsoft.NET.Build.Tasks.UnitTests
                 logs: logs
             );
 
-        private ReportAssetsLogMessages GetExecutedTaskFromContents(string lockFileContents, MockLog logger)
+        private ReportAssetsLogMessages GetExecutedTaskFromContents(string lockFileContents, MockLog logger,
+            string warnAsError = null, string noWarn = null)
         {
             var lockFile = TestLockFiles.CreateLockFile(lockFileContents);
-            return GetExecutedTask(lockFile, logger);
+            return GetExecutedTask(lockFile, logger, warnAsError, noWarn);
         }
 
-        private ReportAssetsLogMessages GetExecutedTask(LockFile lockFile, MockLog logger)
+        private ReportAssetsLogMessages GetExecutedTask(LockFile lockFile, MockLog logger, 
+            string warnAsError = null, string noWarn = null)
         {
             var task = new ReportAssetsLogMessages(lockFile, logger)
             {
                 ProjectAssetsFile = lockFile.Path,
+                WarnAsError = warnAsError,
+                NoWarn = noWarn
             };
 
             task.Execute().Should().BeTrue();
